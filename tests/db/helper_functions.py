@@ -2,8 +2,6 @@ import shutil
 from tabulate import tabulate
 import typing
 import sys
-
-import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
@@ -118,14 +116,14 @@ if __name__ == "__main__":
         clear_db()
         initialize_db()
         add_courses()
-        add_new_user("eclar022@ucr.edu", "test", "user")
-        add_user_to_course("eclar022@ucr.edu", "test", "user", 1, "instructor")
-        add_user_to_course("eclar022@ucr.edu", "test", "user", 9, "student")
+        add_new_user("gnico007@ucr.edu", "test", "user")
+        add_user_to_course("gnico007@ucr.edu", "test", "user", 1, "instructor")
+        add_user_to_course("gnico007@ucr.edu", "test", "user", 9, "student")
         print("Database reset.")
-    elif "print" in sys.argv:
-        print_users()
-        print_courses()
-        print_participation()
-        print_documents()
-        print_segments()
-        print_embeddings()
+    # elif "print" in sys.argv:
+    #     print_users()
+    #     print_courses()
+    #     print_participation()
+    #     print_documents()
+    #     print_segments()
+    #     print_embeddings()
