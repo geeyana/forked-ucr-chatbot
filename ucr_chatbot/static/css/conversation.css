@@ -134,6 +134,15 @@ h1 span {
   color: white;
 }
 
+.system {
+  align-self: center;
+  background-color: #ff6b6b;
+  color: white;
+  font-style: italic;
+  text-align: center;
+  max-width: 500px;
+}
+
 /* MESSAGE INPUT */
 #message-input {
   padding: 1rem;
