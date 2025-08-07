@@ -2,14 +2,10 @@ import shutil
 from tabulate import tabulate
 import typing
 import sys
-<<<<<<< HEAD
-from pathlib import Path
-=======
 import os
+from pathlib import Path
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-
-
->>>>>>> 53784ef (Reorganized js + css, new header element)
 from ucr_chatbot.db.models import *
 from ucr_chatbot.config import Config
 
