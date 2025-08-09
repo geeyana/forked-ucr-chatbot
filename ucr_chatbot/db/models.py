@@ -13,7 +13,6 @@ from sqlalchemy.orm import declarative_base, mapped_column, relationship, Sessio
 import enum
 from pgvector.sqlalchemy import Vector  # type: ignore
 from datetime import datetime, timezone
-from pathlib import Path
 from sqlalchemy.exc import SQLAlchemyError
 import pandas as pd
 from typing import cast
@@ -287,7 +286,6 @@ def add_new_course(name: str):
             session.add(new_course)
             session.commit()
 
-            create_upload_folder(getattr(new_course, "id"))
         except SQLAlchemyError:
             session.rollback()
 
