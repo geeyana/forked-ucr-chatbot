@@ -11,7 +11,6 @@ from flask import (
     flash,
     current_app,
     Response as FlaskResponse,
-    get_flashed_messages,
     make_response,
 )
 
@@ -19,13 +18,15 @@ from sqlalchemy import select, insert, func
 from pathlib import Path
 import pandas as pd
 import io
-import os
+import json
 from werkzeug.utils import secure_filename
 from werkzeug.datastructures import FileStorage
 from werkzeug.security import check_password_hash
 from flask_login import current_user, login_required, login_user, logout_user  # type: ignore
 from datetime import datetime, timedelta, timezone
 from ucr_chatbot.decorators import roles_required
+from ucr_chatbot.api.language_model.response import client as response_client
+from ucr_chatbot.api.context_retrieval.retriever import retriever
 from typing import cast, Union, Any, Dict, Mapping
 
 
@@ -38,6 +39,7 @@ from ucr_chatbot.db.models import (
     Courses,
     ParticipatesIn,
     Documents,
+    References,
     add_new_document,
     store_segment,
     store_embedding,
@@ -57,6 +59,24 @@ from ..api.file_parsing.file_parsing import parse_file
 from ..api.embedding.embedding import embed_text
 
 bp = Blueprint("web_routes", __name__)
+
+SYSTEM_PROMPT = """# Main directive
+You are a helpful student tutor for a university computer science course. You must assist students in their learning by answering question in a didactically useful way. You should only answer questions if you are certain that you know the correct answer.
+You will be given context that may or may not be useful for answering the student's question followed by the question. Again, only answer the question if you are certain that you have a correct answer. The conversation history for the last 10 messages is also provided. 
+Ever explicitly say that you got information from the context or the references/numbers they come from, or tell students to reference document numbers. Only answer the students questions as if the information is coming from you.
+Your main priority is being a tutor, and instead of giving direct answers most of the time, focus on teaching students and leading them to the answer themselves.
+
+If the context is not relevant, or if it is not a follow up question, then you should tell the student, "I cannot find any relevant course materials to help answer your question."
+
+## Context
+{context}
+
+## History
+{history}
+
+## Question
+{question}
+"""
 
 
 @bp.route("/")
@@ -80,7 +100,7 @@ def login():
     :return: a redirect response to the dashboard or the login page
     :rtype: flask.Response
     """
-    get_flashed_messages()  # clearing flash() messages
+    # get_flashed_messages()  # clearing flash() messages
     config = cast(Mapping[str, Any], current_app.config)
     max_attempts = cast(int, config.get("MAX_LOGIN_ATTEMPTS", 3))
     cooldown_minutes = 5
@@ -316,6 +336,91 @@ def create_conversation(course_id: int, user_email: str, message: str):
     return jsonify({"conversationId": conv_id})
 
 
+def generate_response(
+    prompt: str,
+    conversation_id: int,
+    stream: bool = False,
+    history: int = 5,
+    temperature: float = 1.0,
+    max_tokens: int = 5000,
+    stop_sequences: list[str] | None = None,
+) -> FlaskResponse:
+    """Generates RAG assisted response for the reply in a user conversation
+
+    :param prompt: The user defined query for the LLM
+    :param conversation_id: The ID of the current conversation.
+    :param stream: Single response or continuous conversation
+    :param history: The number of student/bot history responses included in the prompt
+    :param temperature: How creative the response is
+    :param max_tokens: The maximum number of tokens that can be input to a single query
+    :stop_sequences: A list of stop sequences for the prompt
+
+    :return: Response of the LLM and its sources
+    """
+
+    if stop_sequences is None:
+        stop_sequences = []
+
+    with Session(engine) as session:
+        course_id_row = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+
+    if course_id_row is None:
+        return jsonify(
+            {
+                "text": "An error has occured.",
+                "sources": [{"source_id": 0}],
+                "conversation_id": conversation_id,
+            }
+        )
+
+    course_id = course_id_row.course_id
+
+    segments = retriever.get_segments_for(prompt, course_id=course_id, num_segments=10)  # type: ignore
+    context = "\n".join(
+        # Assuming each 's' object has 'segment_id' and 'text' attributes
+        map(lambda s: f"Reference number: {s.id}, text: {s.text}", segments)  # type: ignore
+    )
+
+    prompt_with_context = SYSTEM_PROMPT.format(
+        context=context,
+        question=prompt,
+        history=get_conv_messages(conversation_id).get_json()["messages"][
+            -(history * 2) :
+        ],
+    )
+
+    generation_params = {  # type: ignore
+        "prompt": prompt_with_context,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stop_sequences": stop_sequences,
+    }
+
+    if stream:
+        # Define a generator function to format the stream as Server-Sent Events (SSE)
+        def stream_generator():
+            for chunk in response_client.stream_response(**generation_params):  # type: ignore
+                # Format each chunk as a Server-Sent Event
+                yield f"data: {json.dumps({'text': chunk})}\n\n"
+
+        return FlaskResponse(stream_generator(), mimetype="text/event-stream")
+    else:
+        response_text = response_client.get_response(**generation_params)  # type: ignore
+
+        # Dynamically create the list of source IDs
+        sources = [{"segment_id": s.id} for s in segments]  # type: ignore
+
+        return jsonify(
+            {
+                "text": response_text,
+                "sources": sources,
+                "conversation_id": conversation_id,
+            }
+        )
+
+
 def reply_conversation(conversation_id: int, user_email: str, message: str):
     """Retrieves the LLM response to a user's message
 
@@ -324,17 +429,32 @@ def reply_conversation(conversation_id: int, user_email: str, message: str):
     :param message: the user's message the LLM is responding to
 
     """
-    _ = message
-    llm_response = "LLM response"
+    llm_response_data = generate_response(
+        prompt=message, conversation_id=conversation_id, stream=False, history=5
+    ).get_json()
+    llm_response = llm_response_data["text"]
     with Session(engine) as session:
-        insert_msg = insert(Messages).values(
-            body=llm_response,
-            conversation_id=conversation_id,
-            type=MessageType.BOT_MESSAGES,
-            written_by=user_email,
+        insert_msg = (
+            insert(Messages)
+            .values(
+                body=llm_response,
+                conversation_id=conversation_id,
+                type=MessageType.BOT_MESSAGES,
+                written_by=user_email,
+            )
+            .returning(Messages.id)
         )
-        session.execute(insert_msg)
+        result = session.execute(insert_msg)
+        message_id = result.scalar_one()
         session.commit()
+        if message_id:
+            for seg in llm_response_data["sources"]:
+                insert_ref = insert(References).values(
+                    message=message_id,
+                    segment=seg["segment_id"],
+                )
+                session.execute(insert_ref)
+                session.commit()
 
     return jsonify({"reply": llm_response})
 
@@ -410,7 +530,6 @@ def conversation(conversation_id: int):
     """Renders the conversation page for an existing conversation.
     :param conversation_id: The id of the conversation to be displayed.
     """
-
     if (
         request.accept_mimetypes.accept_json
         and not request.accept_mimetypes.accept_html
@@ -441,6 +560,307 @@ def conversation(conversation_id: int):
             course_id=course_id,
             is_assistant=(current_user.role == "assistant"),
         )
+    
+@bp.route("/ula_conversation/<int:conversation_id>", methods=["GET", "POST"])
+@login_required
+@roles_required(["assistant"]) # type: ignore
+def ula_conversation(conversation_id: int):
+    """ULA page"""
+    # conversation_id = request.args.get('conversation_id', type=int) # type: ignore
+    # if not convo:
+    #     return jsonify({'error': 'Conversation not found'}), 404
+
+    user_email = current_user.email
+
+    if request.method == 'GET':
+        # Return full history so tutor sees student + bot messages
+        return 'chat summary'
+
+    # POST: tutor sends a message
+    data = request.get_json()
+    message_text = data.get('message', '').strip()
+    if not message_text:
+        return jsonify({'error': 'Message cannot be empty'}), 400
+
+    with Session(engine) as session:
+        # Insert tutor's message
+        insert_msg = insert(Messages).values(
+            body=message_text,
+            conversation_id=conversation_id,
+            type=MessageType.ASSISTANT_MESSAGES,  # or MessageType.HUMAN_TUTOR if you have one
+            written_by=user_email,
+        )
+        session.execute(insert_msg)
+        session.commit()
+
+        # Also fetch course_id for rendering template
+        conv = session.execute(
+            select(Conversations).where(Conversations.id == conversation_id)
+        ).scalar_one()
+        course_id = conv.course_id
+
+    return render_template(
+        "conversation.html", conversation_id=conversation_id, course_id=course_id
+    )
+
+
+
+def create_upload_folder(course_id: int):
+    """Creates a folder named after the course id within the uploads folder.
+    :param course_id: name of the folder to be created
+    """
+    upload_path = Path(Config.FILE_STORAGE_PATH)
+    if not upload_path.is_dir():
+        upload_path.mkdir(parents=True, exist_ok=True)
+
+    course_path = upload_path / str(course_id)
+    if not course_path.is_dir():
+        course_path.mkdir(parents=True, exist_ok=True)
+
+
+@bp.route("/conversation/<int:conversation_id>/redirect", methods=["POST"])
+@login_required
+def redirect_conversation(conversation_id: int):
+    """Redirects a conversation to an assistant for manual handling.
+    :param conversation_id: The ID of the conversation to redirect.
+    """
+    user_email = current_user.email
+
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            return jsonify({"error": "Conversation not found"}), 404
+
+        # Check if user is the initiator or has permission
+        if conversation.initiated_by != user_email:
+            # Check if user is an assistant for this course
+            participation = (
+                session.query(ParticipatesIn)
+                .filter_by(
+                    email=user_email, course_id=conversation.course_id, role="assistant"
+                )
+                .first()
+            )
+            if not participation:
+                return jsonify({"error": "Unauthorized"}), 403
+
+        # Mark conversation as redirected but not resolved
+        try:
+            conversation.redirected = True  # type: ignore
+            session.commit()
+        except Exception as e:
+            # If redirected column doesn't exist, just return success
+            print(f"Warning: redirected column not found, skipping redirect flag: {e}")
+            session.rollback()
+
+        return jsonify(
+            {"status": "redirected", "message": "Conversation redirected to assistant"}
+        )
+
+
+@bp.route("/conversation/<int:conversation_id>/resolve", methods=["POST"])
+@login_required
+def resolve_conversation(conversation_id: int):
+    """Marks a conversation as resolved.
+    :param conversation_id: The ID of the conversation to resolve.
+    """
+    user_email = current_user.email
+
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            return jsonify({"error": "Conversation not found"}), 404
+
+        # Check if user is the initiator or has permission
+        if conversation.initiated_by != user_email:
+            # Check if user is an assistant for this course
+            participation = (
+                session.query(ParticipatesIn)
+                .filter_by(
+                    email=user_email, course_id=conversation.course_id, role="assistant"
+                )
+                .first()
+            )
+            if not participation:
+                return jsonify({"error": "Unauthorized"}), 403
+
+        # Mark conversation as resolved
+        conversation.resolved = True  # type: ignore
+        session.commit()
+
+        return jsonify(
+            {"status": "resolved", "message": "Conversation marked as resolved"}
+        )
+
+
+@bp.route("/assistant/dashboard")
+@login_required
+def assistant_dashboard():
+    """Dashboard for assistants to view and handle redirected conversations."""
+    user_email = current_user.email
+
+    with Session(engine) as session:
+        # Get all courses where the user is an assistant
+        assistant_courses = (
+            session.query(ParticipatesIn)
+            .filter_by(email=user_email, role="assistant")
+            .all()
+        )
+
+        if not assistant_courses:
+            flash("You do not have assistant permissions for any courses.", "danger")
+            return redirect(url_for("web_routes.course_selection"))
+
+        course_ids = [ac.course_id for ac in assistant_courses]
+
+        # Get all redirected but unresolved conversations from these courses (ongoing)
+        # Temporarily handle missing redirected column
+        try:
+            ongoing_conversations = (
+                session.query(Conversations)
+                .filter(
+                    Conversations.course_id.in_(course_ids),
+                    Conversations.redirected == True,
+                    Conversations.resolved == False,
+                )
+                .all()
+            )
+        except Exception as e:
+            # If redirected column doesn't exist, show all unresolved conversations
+            print(
+                f"Warning: redirected column not found, showing all unresolved conversations: {e}"
+            )
+            ongoing_conversations = (
+                session.query(Conversations)
+                .filter(
+                    Conversations.course_id.in_(course_ids),
+                    Conversations.resolved == False,
+                )
+                .all()
+            )
+
+        # Load messages for each conversation to avoid template errors
+        for conversation in ongoing_conversations:
+            conversation.messages = (
+                session.query(Messages).filter_by(conversation_id=conversation.id).all()
+            )
+
+        # Get all resolved conversations from these courses
+        resolved_conversations = (
+            session.query(Conversations)
+            .filter(
+                Conversations.course_id.in_(course_ids), Conversations.resolved == True
+            )
+            .all()
+        )
+
+        # Load messages for each resolved conversation to avoid template errors
+        for conversation in resolved_conversations:
+            conversation.messages = (
+                session.query(Messages).filter_by(conversation_id=conversation.id).all()
+            )
+
+        # Get course names for display
+        course_names = {}
+        for course in session.query(Courses).filter(Courses.id.in_(course_ids)).all():
+            course_names[course.id] = course.name
+
+    return render_template(
+        "assistant_dashboard.html",
+        ongoing_conversations=ongoing_conversations,
+        resolved_conversations=resolved_conversations,
+        course_names=course_names,
+    )
+
+
+@bp.route("/assistant/conversation/<int:conversation_id>")
+@login_required
+def assistant_conversation(conversation_id: int):
+    """Assistant interface for handling a specific conversation."""
+    user_email = current_user.email
+
+    # Check if user is an assistant for this conversation's course
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            abort(404, description="Conversation not found")
+
+        participation = (
+            session.query(ParticipatesIn)
+            .filter_by(
+                email=user_email, course_id=conversation.course_id, role="assistant"
+            )
+            .first()
+        )
+        if not participation:
+            flash(
+                "You do not have assistant permissions for this conversation.", "danger"
+            )
+            return redirect(url_for("web_routes.course_selection"))
+
+        # Get course name
+        course = session.query(Courses).filter_by(id=conversation.course_id).first()
+        course_name = course.name if course else "Unknown Course"
+
+    return render_template(
+        "assistant_conversation.html",
+        conversation_id=conversation_id,
+        course_id=conversation.course_id,
+        course_name=course_name,
+        student_email=conversation.initiated_by,
+    )
+
+
+@bp.route("/assistant/conversation/<int:conversation_id>/send", methods=["POST"])
+@login_required
+def assistant_send_message(conversation_id: int):
+    """Allows assistants to send messages in a conversation.
+    :param conversation_id: The ID of the conversation.
+    """
+    content = request.get_json()
+    user_email = current_user.email
+    message = content.get("message", "")
+
+    # Check if user is an assistant for this conversation's course
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            return jsonify({"error": "Conversation not found"}), 404
+
+        participation = (
+            session.query(ParticipatesIn)
+            .filter_by(
+                email=user_email, course_id=conversation.course_id, role="assistant"
+            )
+            .first()
+        )
+        if not participation:
+            return jsonify(
+                {"error": "You do not have assistant permissions for this conversation"}
+            ), 403
+
+    if not message.strip():
+        return jsonify({"error": "Message cannot be empty"}), 400
+
+    # Add assistant message to the conversation
+    assistant_message = Messages(
+        body=message,
+        conversation_id=conversation_id,
+        type=MessageType.ASSISTANT_MESSAGES,
+        written_by=user_email,
+    )
+    session.add(assistant_message)
+    session.commit()
+
+    return jsonify({"status": "sent", "message": "Assistant message sent successfully"})
 
 
 @bp.route("/course/<int:course_id>/documents", methods=["GET", "POST"])
@@ -490,15 +910,18 @@ def course_documents(course_id: int):
             relative_path = Path(str(course_id)) / filename
             full_local_path = curr_path / relative_path
 
+            create_upload_folder(course_id=course_id)
             file.save(str(full_local_path))
 
             segments = parse_file(str(full_local_path))
             add_new_document(
-                str(relative_path).replace(str(Path().anchor), ""), course_id
+                str(relative_path).replace(str(Path().anchor), ""),
+                course_id,
             )
             for seg in segments:
                 seg_id = store_segment(
-                    seg, str(relative_path).replace(str(Path().anchor), "")
+                    seg,
+                    str(relative_path).replace(str(Path().anchor), ""),
                 )
 
                 embedding = embed_text(seg)
@@ -509,7 +932,7 @@ def course_documents(course_id: int):
         except (ValueError, TypeError):
             if full_local_path and full_local_path.exists():
                 full_local_path.unlink()
-            error_msg = "<p style='color:red;'>You can't upload this type of file</p>"
+            flash("You can't upload this type of file", "error")
 
     docs_html = ""
     active_docs = get_active_documents()
@@ -518,7 +941,9 @@ def course_documents(course_id: int):
         for idx, doc in enumerate(docs_dir.iterdir(), 1):
             if not doc.is_file():
                 continue
-            file_path = f"{course_id}/{secure_filename(doc.name)}"
+
+            file_path = str(Path(str(course_id)) / secure_filename(doc.name))
+            # file_path = f"{course_id}/{secure_filename(doc.name)}"
 
             if file_path not in active_docs:
                 continue
@@ -565,7 +990,6 @@ def delete_document(file_path: str):
     if current_user.is_anonymous:
         abort(403)
 
-    file_path = file_path.replace(os.sep, "/")
     full_path = str(Path(Config.FILE_STORAGE_PATH) / file_path)
 
     with Session(engine) as session:
@@ -611,7 +1035,6 @@ def download_file(file_path: str):
     :rtype: flask.wrappers.Response
     """
     email = current_user.email
-    file_path = file_path.replace(os.sep, "/")
     with Session(engine) as session:
         document = session.query(Documents).filter_by(file_path=file_path).first()
         if document is None:

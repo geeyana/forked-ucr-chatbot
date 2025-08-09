@@ -34,7 +34,7 @@
         {% if role == 'student' %}
         <li>
           <a href="{{ url_for('web_routes.new_conversation', course_id=course.id) }}">
-            {{ course.name }}
+            {{ course.name }} (Student View)
           </a>
         </li>
         {% endif %}
@@ -42,6 +42,17 @@
         <li>
           <a href="{{ url_for('web_routes.course_documents', course_id=course.id) }}">
             {{ course.name }} (Instructor View)
+          </a>
+        </li>    
+        {% endif %}
+        {% if role == 'assistant' %}
+        <li>
+          <a href="{{ url_for('web_routes.new_conversation', course_id=course.id) }}">
+            {{ course.name }} (ULA View)
+          </a>
+        </li>
+          <a href="{{ url_for('web_routes.assistant_dashboard') }}">
+            {{ course.name }} (ULA)
           </a>
         </li>    
         {% endif %}  

@@ -112,7 +112,7 @@ def test_insert_conversations(db: Connection):
     """tests if a conversation can be inserted and selected out of db"""
 
 
-    stmt = insert(Conversations).values(id =100, initiated_by = 'test@ucr.edu', course_id = 1)
+    stmt = insert(Conversations).values(id=100, initiated_by='test@ucr.edu', course_id=1, resolved=False, redirected=False)
     db.execute(stmt)
     db.commit()
 
@@ -124,7 +124,7 @@ def test_insert_conversations(db: Connection):
     for row in result:
         answer = row
     assert answer is not None
-    assert answer == (100, 'test@ucr.edu',1)
+    assert answer == (100, 'test@ucr.edu', 1, False, False)  # Added resolved and redirected columns
 
 def test_insert_messages(db: Connection): 
     """tests if a message can be inserted and selected out of db"""
@@ -394,8 +394,9 @@ def test_store_segment(db: Connection):
 def test_store_embedding(db: Connection):
     """Tests the store_embedding wrapper function"""
     segment_id = store_segment("Text string", "slide_2.pdf")
-    store_embedding([1.0, 2.0, 3.0], segment_id)
-    s = select(Embeddings).where(Embeddings.vector==[1.0, 2.0, 3.0], Embeddings.segment_id==segment_id)
+    embedding = [i for i in range(100)]
+    store_embedding(embedding, segment_id)
+    s = select(Embeddings).where(Embeddings.vector==embedding, Embeddings.segment_id==segment_id)
     result = db.execute(s)
 
     answer = None
@@ -404,5 +405,5 @@ def test_store_embedding(db: Connection):
     assert answer is not None
     id, vector, seg_id = answer
     assert id == 1
-    assert np.allclose(vector, [1.0, 2.0, 3.0])
+    assert np.allclose(vector, embedding)
     assert seg_id == segment_id

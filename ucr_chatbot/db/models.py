@@ -13,7 +13,6 @@ from sqlalchemy.orm import declarative_base, mapped_column, relationship, Sessio
 import enum
 from pgvector.sqlalchemy import Vector  # type: ignore
 from datetime import datetime, timezone
-from pathlib import Path
 from sqlalchemy.exc import SQLAlchemyError
 import pandas as pd
 from typing import cast
@@ -107,6 +106,8 @@ class Conversations(base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     initiated_by = Column(String, ForeignKey("Users.email"), nullable=False)
     course_id = Column(Integer, ForeignKey("Courses.id"), nullable=False)
+    resolved = Column(Boolean, default=False, nullable=False)
+    redirected = Column(Boolean, default=False, nullable=False)
 
     course = relationship("Courses", back_populates="conversations")
     messages = relationship("Messages", back_populates="conversation", uselist=True)
@@ -285,7 +286,6 @@ def add_new_course(name: str):
             session.add(new_course)
             session.commit()
 
-            create_upload_folder(getattr(new_course, "id"))
         except SQLAlchemyError:
             session.rollback()
 
@@ -382,3 +382,75 @@ def create_upload_folder(course_id: int):
 
     course_path = upload_path / str(course_id)
     course_path.mkdir(parents=True, exist_ok=True)
+
+
+def mark_conversation_resolved(conversation_id: int):
+    """Marks a conversation as resolved.
+    :param conversation_id: The ID of the conversation to mark as resolved.
+    """
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if conversation:
+            conversation.resolved = True  # type: ignore
+            session.commit()
+            print(f"Conversation {conversation_id} marked as resolved.")
+        else:
+            print(f"Conversation {conversation_id} not found.")
+
+
+def mark_conversation_unresolved(conversation_id: int):
+    """Marks a conversation as unresolved.
+    :param conversation_id: The ID of the conversation to mark as unresolved.
+    """
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if conversation:
+            conversation.resolved = False  # type: ignore
+            session.commit()
+            print(f"Conversation {conversation_id} marked as unresolved.")
+        else:
+            print(f"Conversation {conversation_id} not found.")
+
+
+def get_conversation_resolved_status(conversation_id: int) -> bool:
+    """Gets the resolved status of a conversation.
+    :param conversation_id: The ID of the conversation to check.
+    :return: True if the conversation is resolved, False otherwise.
+    """
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if conversation:
+            return bool(conversation.resolved)  # type: ignore
+        else:
+            print(f"Conversation {conversation_id} not found.")
+            return False
+
+
+def get_resolved_conversations(course_id: int | None = None) -> list[Conversations]:
+    """Gets all resolved conversations, optionally filtered by course.
+    :param course_id: Optional course ID to filter conversations.
+    :return: List of resolved conversations.
+    """
+    with Session(engine) as session:
+        query = session.query(Conversations).filter_by(resolved=True)
+        if course_id is not None:
+            query = query.filter_by(course_id=course_id)
+        return query.all()
+
+
+def get_unresolved_conversations(course_id: int | None = None) -> list[Conversations]:
+    """Gets all unresolved conversations, optionally filtered by course.
+    :param course_id: Optional course ID to filter conversations.
+    :return: List of unresolved conversations.
+    """
+    with Session(engine) as session:
+        query = session.query(Conversations).filter_by(resolved=False)
+        if course_id is not None:
+            query = query.filter_by(course_id=course_id)
+        return query.all()
