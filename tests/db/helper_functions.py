@@ -2,7 +2,10 @@ import shutil
 from tabulate import tabulate
 import typing
 import sys
+import os
 from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 from ucr_chatbot.db.models import *
 from ucr_chatbot.config import Config
 
@@ -118,10 +121,10 @@ if __name__ == "__main__":
         add_user_to_course("ghorzemp@ucr.edu", "test", "user", 1, "instructor")
         add_user_to_course("tylertulowitzki49@gmail.com", "test", "user", 9, "student")
         add_user_to_course("ghorzemp@ucr.edu", "test", "user", 9, "assistant")
-
-        # add_new_user("ghorzemp@ucr.edu", "test2", "user2")
-        # add_user_to_course("ghorzemp@ucr.edu", "test2", "user2", 9, "instructor")
-        # add_user_to_course("ghorzemp@ucr.edu", "test2", "user2", 1, "student")
+        add_new_user("snall008@ucr.edu", "test", "user")
+        add_user_to_course("snallapa1@gmail.com", "test", "user", 1, "instructor")
+        add_user_to_course("snall008@gmail.com", "test", "user", 9, "instructor")
+        add_user_to_course("snall008@ucr.edu", "test", "user", 9, "student")
         print("Database reset.")
     # elif "print" in sys.argv:
     #     print_users()

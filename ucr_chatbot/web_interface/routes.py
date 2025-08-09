@@ -47,6 +47,7 @@ from ucr_chatbot.db.models import (
     set_document_inactive,
     add_user_to_course,
     add_students_from_list,
+    add_assistants_from_list,
     Users,
 )
 from ucr_chatbot.config import Config
@@ -578,6 +579,251 @@ def create_upload_folder(course_id: int):
         course_path.mkdir(parents=True, exist_ok=True)
 
 
+@bp.route("/conversation/<int:conversation_id>/redirect", methods=["POST"])
+@login_required
+def redirect_conversation(conversation_id: int):
+    """Redirects a conversation to an assistant for manual handling.
+    :param conversation_id: The ID of the conversation to redirect.
+    """
+    user_email = current_user.email
+
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            return jsonify({"error": "Conversation not found"}), 404
+
+        # Check if user is the initiator or has permission
+        if conversation.initiated_by != user_email:
+            # Check if user is an assistant for this course
+            participation = (
+                session.query(ParticipatesIn)
+                .filter_by(
+                    email=user_email, course_id=conversation.course_id, role="assistant"
+                )
+                .first()
+            )
+            if not participation:
+                return jsonify({"error": "Unauthorized"}), 403
+
+        # Mark conversation as redirected but not resolved
+        try:
+            conversation.redirected = True  # type: ignore
+            session.commit()
+        except Exception as e:
+            # If redirected column doesn't exist, just return success
+            print(f"Warning: redirected column not found, skipping redirect flag: {e}")
+            session.rollback()
+
+        return jsonify(
+            {"status": "redirected", "message": "Conversation redirected to assistant"}
+        )
+
+
+@bp.route("/conversation/<int:conversation_id>/resolve", methods=["POST"])
+@login_required
+def resolve_conversation(conversation_id: int):
+    """Marks a conversation as resolved.
+    :param conversation_id: The ID of the conversation to resolve.
+    """
+    user_email = current_user.email
+
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            return jsonify({"error": "Conversation not found"}), 404
+
+        # Check if user is the initiator or has permission
+        if conversation.initiated_by != user_email:
+            # Check if user is an assistant for this course
+            participation = (
+                session.query(ParticipatesIn)
+                .filter_by(
+                    email=user_email, course_id=conversation.course_id, role="assistant"
+                )
+                .first()
+            )
+            if not participation:
+                return jsonify({"error": "Unauthorized"}), 403
+
+        # Mark conversation as resolved
+        conversation.resolved = True  # type: ignore
+        session.commit()
+
+        return jsonify(
+            {"status": "resolved", "message": "Conversation marked as resolved"}
+        )
+
+
+@bp.route("/assistant/dashboard")
+@login_required
+def assistant_dashboard():
+    """Dashboard for assistants to view and handle redirected conversations."""
+    user_email = current_user.email
+
+    with Session(engine) as session:
+        # Get all courses where the user is an assistant
+        assistant_courses = (
+            session.query(ParticipatesIn)
+            .filter_by(email=user_email, role="assistant")
+            .all()
+        )
+
+        if not assistant_courses:
+            flash("You do not have assistant permissions for any courses.", "danger")
+            return redirect(url_for("web_routes.course_selection"))
+
+        course_ids = [ac.course_id for ac in assistant_courses]
+
+        # Get all redirected but unresolved conversations from these courses (ongoing)
+        # Temporarily handle missing redirected column
+        try:
+            ongoing_conversations = (
+                session.query(Conversations)
+                .filter(
+                    Conversations.course_id.in_(course_ids),
+                    Conversations.redirected == True,
+                    Conversations.resolved == False,
+                )
+                .all()
+            )
+        except Exception as e:
+            # If redirected column doesn't exist, show all unresolved conversations
+            print(
+                f"Warning: redirected column not found, showing all unresolved conversations: {e}"
+            )
+            ongoing_conversations = (
+                session.query(Conversations)
+                .filter(
+                    Conversations.course_id.in_(course_ids),
+                    Conversations.resolved == False,
+                )
+                .all()
+            )
+
+        # Load messages for each conversation to avoid template errors
+        for conversation in ongoing_conversations:
+            conversation.messages = (
+                session.query(Messages).filter_by(conversation_id=conversation.id).all()
+            )
+
+        # Get all resolved conversations from these courses
+        resolved_conversations = (
+            session.query(Conversations)
+            .filter(
+                Conversations.course_id.in_(course_ids), Conversations.resolved == True
+            )
+            .all()
+        )
+
+        # Load messages for each resolved conversation to avoid template errors
+        for conversation in resolved_conversations:
+            conversation.messages = (
+                session.query(Messages).filter_by(conversation_id=conversation.id).all()
+            )
+
+        # Get course names for display
+        course_names = {}
+        for course in session.query(Courses).filter(Courses.id.in_(course_ids)).all():
+            course_names[course.id] = course.name
+
+    return render_template(
+        "assistant_dashboard.html",
+        ongoing_conversations=ongoing_conversations,
+        resolved_conversations=resolved_conversations,
+        course_names=course_names,
+    )
+
+
+@bp.route("/assistant/conversation/<int:conversation_id>")
+@login_required
+def assistant_conversation(conversation_id: int):
+    """Assistant interface for handling a specific conversation."""
+    user_email = current_user.email
+
+    # Check if user is an assistant for this conversation's course
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            abort(404, description="Conversation not found")
+
+        participation = (
+            session.query(ParticipatesIn)
+            .filter_by(
+                email=user_email, course_id=conversation.course_id, role="assistant"
+            )
+            .first()
+        )
+        if not participation:
+            flash(
+                "You do not have assistant permissions for this conversation.", "danger"
+            )
+            return redirect(url_for("web_routes.course_selection"))
+
+        # Get course name
+        course = session.query(Courses).filter_by(id=conversation.course_id).first()
+        course_name = course.name if course else "Unknown Course"
+
+    return render_template(
+        "assistant_conversation.html",
+        conversation_id=conversation_id,
+        course_id=conversation.course_id,
+        course_name=course_name,
+        student_email=conversation.initiated_by,
+    )
+
+
+@bp.route("/assistant/conversation/<int:conversation_id>/send", methods=["POST"])
+@login_required
+def assistant_send_message(conversation_id: int):
+    """Allows assistants to send messages in a conversation.
+    :param conversation_id: The ID of the conversation.
+    """
+    content = request.get_json()
+    user_email = current_user.email
+    message = content.get("message", "")
+
+    # Check if user is an assistant for this conversation's course
+    with Session(engine) as session:
+        conversation = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+        if not conversation:
+            return jsonify({"error": "Conversation not found"}), 404
+
+        participation = (
+            session.query(ParticipatesIn)
+            .filter_by(
+                email=user_email, course_id=conversation.course_id, role="assistant"
+            )
+            .first()
+        )
+        if not participation:
+            return jsonify(
+                {"error": "You do not have assistant permissions for this conversation"}
+            ), 403
+
+    if not message.strip():
+        return jsonify({"error": "Message cannot be empty"}), 400
+
+    # Add assistant message to the conversation
+    assistant_message = Messages(
+        body=message,
+        conversation_id=conversation_id,
+        type=MessageType.ASSISTANT_MESSAGES,
+        written_by=user_email,
+    )
+    session.add(assistant_message)
+    session.commit()
+
+    return jsonify({"status": "sent", "message": "Assistant message sent successfully"})
+
+
 @bp.route("/course/<int:course_id>/documents", methods=["GET", "POST"])
 @login_required
 @roles_required(["instructor"])
@@ -769,7 +1015,7 @@ def download_file(file_path: str):
     return send_from_directory(str(Path(Config.FILE_STORAGE_PATH) / directory), name)
 
 
-@bp.route("/course/<int:course_id>/add_user", methods=["POST"])
+@bp.route("/course/<int:course_id>/add_student", methods=["POST"])
 @login_required
 @roles_required(["instructor"])
 def add_student(course_id: int):
@@ -779,8 +1025,9 @@ def add_student(course_id: int):
     user_email = request.form["email"]
     user_fname = request.form["fname"]
     user_lname = request.form["lname"]
+    role = request.form.get("role", "student")  # Default to student if not provided
 
-    add_user_to_course(user_email, user_fname, user_lname, course_id, "student")
+    add_user_to_course(user_email, user_fname, user_lname, course_id, role)
     return redirect(url_for(".course_documents", course_id=course_id))
 
 
@@ -811,6 +1058,55 @@ def add_from_csv(course_id: int):
                 data["Student"] = data["Student"].str.strip()
                 data[["Last Name", "First Name"]] = data["Student"].str.split(",")
                 add_students_from_list(data, course_id)
+        except Exception:
+            return redirect(request.url)
+
+    return redirect(url_for(".course_documents", course_id=course_id))
+
+
+@bp.route("/course/<int:course_id>/add_assistant", methods=["POST"])
+@login_required
+@roles_required(["instructor"])
+def add_assistant(course_id: int):
+    """Adds an assistant to the current course.
+    :param course_id: The course the assistant will be added to.
+    """
+    user_email = request.form["email"]
+    user_fname = request.form["fname"]
+    user_lname = request.form["lname"]
+    role = request.form.get("role", "assistant")  # Default to assistant if not provided
+
+    add_user_to_course(user_email, user_fname, user_lname, course_id, role)
+    return redirect(url_for(".course_documents", course_id=course_id))
+
+
+@bp.route("/course/<int:course_id>/add_assistant_from_csv", methods=["POST"])
+@login_required
+@roles_required(["instructor"])
+def add_assistant_from_csv(course_id: int):
+    """Adds multiple assistants an uploaded assistant list csv file.
+    :params course_id: The course the assistants will be added to.
+    """
+    if request.method == "POST":
+        if "file" not in request.files:
+            return redirect(request.url)
+
+        file: FileStorage = request.files["file"]
+        if not file or not file.filename or not file.filename.endswith(".csv"):
+            return redirect(request.url)
+        try:
+            if file and file.filename.endswith(".csv"):
+                stream = io.TextIOWrapper(file.stream, encoding="utf-8")
+                data: pd.DataFrame = pd.read_csv(  # type: ignore
+                    stream,
+                    header=0,
+                    skiprows=[1, 2],
+                    usecols=["Assistant", "SIS User ID"],
+                    dtype=str,  # type: ignore
+                )
+                data["Assistant"] = data["Assistant"].str.strip()
+                data[["Last Name", "First Name"]] = data["Assistant"].str.split(",")
+                add_assistants_from_list(data, course_id)
         except Exception:
             return redirect(request.url)
 
