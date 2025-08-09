@@ -273,6 +273,7 @@ def get_conv_messages(conversation_id: int):
         type_map = {
             MessageType.STUDENT_MESSAGES: "StudentMessage",
             MessageType.BOT_MESSAGES: "BotMessage",
+            MessageType.ASSISTANT_MESSAGES: "AssistantMessage"
         }
         messages_list = []
         for message in messages:
@@ -429,6 +430,17 @@ def reply_conversation(conversation_id: int, user_email: str, message: str):
     :param message: the user's message the LLM is responding to
 
     """
+    with Session(engine) as session:
+        course_id_row = (
+            session.query(Conversations).filter_by(id=conversation_id).first()
+        )
+    
+    if course_id_row is None:
+        return jsonify({"reply": "An error has occured.",})
+    
+    if course_id_row.redirected == True:
+        return jsonify({"reply": ""})
+
     llm_response_data = generate_response(
         prompt=message, conversation_id=conversation_id, stream=False, history=5
     ).get_json()

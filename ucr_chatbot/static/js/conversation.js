@@ -64,34 +64,7 @@ async function loadAllConversationsForUser() {
   chatContainer.innerHTML = "";
 
   data.messages.forEach((msg) => {
-    appendMessage(msg.sender === "StudentMessage" ? "user" : "bot", msg.body);
-  });
-
-  sidebarMessages.innerHTML = "";
-
-  conversationIds.reverse().forEach((id) => {
-    addSidebarMessage(`Conversation ${id}`, id);
-  });
-}
-
-async function loadAllConversationsForUser() {
-  if (!conversationId) return;
-
-  const res = await fetch(`/conversation/${conversationId}`, {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "Accept": "application/json"
-    },
-    body: JSON.stringify({ type: "conversation" }),
-  });
-
-  const data = await res.json();
-
-  chatContainer.innerHTML = "";
-
-  data.messages.forEach((msg) => {
-    appendMessage(msg.sender === "StudentMessage" ? "user" : "bot", msg.body);
+    appendMessage(msg.sender === "AssistantMessage" ? "assistant" : (msg.sender === "StudentMessage" ? "user" : "bot"), msg.body);
   });
 }
 
@@ -101,7 +74,6 @@ loadAllConversationIds();
 let messageCheckInterval;
 
 if (!isNewConversation && conversationId) {
-  loadAllConversationsForUser();
   loadAllConversationsForUser();
 }
 
@@ -141,7 +113,9 @@ async function handleSend(e) {
 
     try {
       const botResponse = await fetchBotReply(message);
-      appendMessage("bot", botResponse);
+      if (botResponse !== "") {
+        appendMessage("bot", botResponse);
+      }
     } catch (error) {
       appendMessage("system", error.message);
       // If conversation is redirected, update the button state
@@ -154,7 +128,9 @@ async function handleSend(e) {
     await sendMessage(message);
     try {
       const botResponse = await fetchBotReply(message);
-      appendMessage("bot", botResponse);
+      if (botResponse !== "") {
+        appendMessage("bot", botResponse);
+      }
     } catch (error) {
       appendMessage("system", error.message);
       // If conversation is redirected, update the button state
@@ -188,7 +164,6 @@ function addSidebarMessage(label, convoId) {
     window.history.replaceState({}, "", `/conversation/${convoId}`);
     conversationId = convoId;
     chatContainer.innerHTML = "";
-    loadAllConversationsForUser();
     loadAllConversationsForUser();
   });
 
@@ -329,9 +304,7 @@ async function checkForNewMessages() {
 }
 
 // Start periodic message checking for existing conversations
-if (!isNewConversation && conversationId) {
-  messageCheckInterval = setInterval(checkForNewMessages, 5000); // Check every 5 seconds
-}
+messageCheckInterval = setInterval(checkForNewMessages, 5000); // Check every 5 seconds
 
 // Function to show notifications
 function showNotification(message) {
