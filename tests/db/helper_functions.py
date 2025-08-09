@@ -2,12 +2,17 @@ import shutil
 from tabulate import tabulate
 import typing
 import sys
+import os
+from pathlib import Path
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 from ucr_chatbot.db.models import *
 from ucr_chatbot.config import Config
 
 def initialize_db():
     """Creates database using specified engine."""
     base.metadata.create_all(engine)
+
 
 def clear_db():
     """Deletes all tables in database."""
@@ -112,10 +117,10 @@ if __name__ == "__main__":
         clear_db()
         initialize_db()
         add_courses()
-        add_new_user("snall008@ucr.edu", "test", "user")
-        add_user_to_course("snallapa1@gmail.com", "test", "user", 1, "instructor")
-        add_user_to_course("snall008@gmail.com", "test", "user", 9, "instructor")
-        add_user_to_course("snall008@ucr.edu", "test", "user", 9, "student")
+        add_new_user("test@gmail.com", "test", "user")
+        add_user_to_course("test@gmail.com", "test", "user", 1, "instructor")
+        add_user_to_course("test@gmail.com", "test", "user", 2, "assistant")
+        add_user_to_course("test@gmail.com", "test", "user", 3, "student")
         print("Database reset.")
     # elif "print" in sys.argv:
     #     print_users()
@@ -124,3 +129,4 @@ if __name__ == "__main__":
     #     print_documents()
     #     print_segments()
     #     print_embeddings()
+    
