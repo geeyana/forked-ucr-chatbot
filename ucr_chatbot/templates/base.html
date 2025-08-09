@@ -16,7 +16,6 @@
       rel="stylesheet"
     />
 
-    {% block head %}{% endblock %}
     {% with messages = get_flashed_messages() %}
       {% if messages %}
         <u1 class="flashes">
@@ -26,7 +25,8 @@
         </u1>
       {% endif %}
     {% endwith %}
-    {% block body %}{% endblock %}
+
+    {% block head %}{% endblock %}
   </head>
 
   <body
@@ -38,7 +38,7 @@
       <img src="{{ url_for('static', filename='images/UC_Riverside_Horiz_BluBG.png') }}" alt="UCR Logo">
     </header>
 
-    {% block content %}{% endblock %}
+    {% block body %}{% endblock %}
     {% block scripts %}{% endblock %}
   </body>
 </html>
