@@ -1,7 +1,5 @@
 {% extends "base.html" %}
 
-{% block title %}Upload Documents | ScottGPT{% endblock %}
-
 {% block css %}
   <!-- <link rel="stylesheet" href="{{ url_for('static', filename='css/documents.css') }}"> -->
 {% endblock %}
@@ -21,25 +19,6 @@
                 button.value = "Uploading...";
             }
         </script>
-<<<<<<< HEAD
-        <body>
-            <p>{{body | safe}}</p>
-        </body>
-        <body>
-            {% with messages = get_flashed_messages(with_categories=true) %}
-               {% if messages %}
-                  <ul class="flashes">
-                    {% for category, message in messages %}
-                      <li class="{{ category }}">{{ message }}</li>
-                    {% endfor %}
-                  </ul>
-                {% endif %}
-            {% endwith %}
-
-            {% block content %}{% endblock %}
-        </body>
-=======
->>>>>>> 77da22c (base.html extended & message PFPs added)
 
         <h1>Add Students to Course</h1>
         <h3>Add student manually:</h3>
@@ -55,24 +34,21 @@
         </form>
         <h3>Add students from csv:</h3>
         <form method=post action="{{ url_for('web_routes.add_from_csv', course_id=course_id) }}" enctype=multipart/form-data>
-            <input type=file name="file">
+            <input type="file" name="file">
             <input type=submit value="Add">
         </form>
-<<<<<<< HEAD
 
         <h1>Generate Summary</h1>
         <form action="{{ url_for('web_routes.generate_summary', course_id=course_id) }}" method="post">
-
             <label for="start_date">Start Date:</label>
             <input type="date" id="start_date" name="start_date"  />
             
             <label for="end_date">End Date:</label>
             <input type="date" id="end_date" name="end_date" />
             
-  <button type="submit">Download Report</button>
-  
-            </form>
-=======
+            <button type="submit">Download Report</button>
+        </form>
+
         <h1>Add Assistants to Course</h1>
         <h3>Add assistant manually:</h3>
         <form method=post action="{{ url_for('web_routes.add_assistant', course_id=course_id) }}" enctype=multipart/form-data>
@@ -87,10 +63,9 @@
         </form>
         <h3>Add assistants from csv:</h3>
         <form method=post action="{{ url_for('web_routes.add_assistant_from_csv', course_id=course_id) }}" enctype=multipart/form-data>
-            <input type=file name="file">
+            <input type="file" name="file">
             <input type=submit value="Add">
         </form>
->>>>>>> 592d8ec (Added assistants form and fixed CSS paths)
     </section>
 {% endblock %}
 
