@@ -75,52 +75,22 @@ async function loadAllConversationsForUser() {
   });
 }
 
-async function loadAllConversationsForUser() {
-  if (!conversationId) return;
-
-  const res = await fetch(`/conversation/${conversationId}`, {
-    method: "POST",
-    headers: { 
-      "Content-Type": "application/json",
-      "Accept": "application/json"
-    },
-    body: JSON.stringify({ type: "conversation" }),
-  });
-
-  const data = await res.json();
-
-  chatContainer.innerHTML = "";
-
-  data.messages.forEach((msg) => {
-    appendMessage(msg.sender === "StudentMessage" ? "user" : "bot", msg.body);
-  });
-}
-
 loadAllConversationIds();
 
 function createNewConversation() {
-  // Clear the chat container
   chatContainer.innerHTML = "";
-  
-  // Reset conversation state
   conversationId = null;
   isNewConversation = true;
   
-  // Update URL to show new conversation
   if (courseId) {
     window.history.replaceState({}, "", `/conversation/new/${courseId}`);
   } else {
     window.history.replaceState({}, "", `/conversation/new`);
   }
   
-  // Clear the message input
   userMessageTextarea.value = "";
-  
-  // Reset redirect button
   redirectButton.textContent = "Redirect to ULA";
   isResolved = false;
-  
-  // Show a message indicating new conversation
   appendMessage("system", "New conversation started. Type your message below.");
 }
 
